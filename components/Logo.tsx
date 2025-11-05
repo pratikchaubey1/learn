@@ -3,7 +3,7 @@ import React from 'react';
 const Logo: React.FC<{ isLightMode?: boolean }> = ({ isLightMode = false }) => (
     <div className="flex items-center space-x-3">
         <img 
-            src="/logo.png" 
+            src="logo.png" 
             alt="Refresh Kid Learning Logo" 
             className="h-20 w-20"
         />
