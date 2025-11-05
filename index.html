@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Refresh Kid Learning</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css" integrity="sha384-n8MVd4RsNIU0KOVEMMZMvyLQzk7uiXcXgCsAP+ABe6o+ok2ASdQpSTERBudDqZj" crossorigin="anonymous">
+    <script src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.js" integrity="sha384-XjKyOOlGwcjNTAIQHIpgOno0Hl1YQqzUOEleOLALmuqehneUG+vnGctmNOIIbRi" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/contrib/auto-render.min.js" integrity="sha384-+VBxd3r6XgURycqtZ117nYw44OOcIax56Z4dCRWbxyPt0Koah1uHoK0o4+/RRE05" crossorigin="anonymous"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+      tailwind.config = {
+        darkMode: 'class',
+        theme: {
+          extend: {
+            fontFamily: {
+              sans: ['Inter', 'sans-serif'],
+            },
+            colors: {
+                'brand-blue': '#2563eb',       // blue-600
+                'brand-blue-light': '#60a5fa', // blue-400
+                'brand-orange': '#f97316',     // orange-500
+                'brand-orange-light': '#fb923c', // orange-400
+                'brand-dark': '#1e293b', // slate-800 (for text)
+                'brand-dark-secondary': '#475569' // slate-600 (for secondary text)
+            },
+            keyframes: {
+              'fade-in': {
+                '0%': { opacity: '0' },
+                '100%': { opacity: '1' },
+              },
+               'fade-in-down': {
+                    '0%': {
+                        opacity: '0',
+                        transform: 'translateY(-10px)'
+                    },
+                    '100%': {
+                        opacity: '1',
+                        transform: 'translateY(0)'
+                    },
+                },
+                'fade-in-up': {
+                    '0%': {
+                        opacity: '0',
+                        transform: 'translateY(10px)'
+                    },
+                    '100%': {
+                        opacity: '1',
+                        transform: 'translateY(0)'
+                    },
+                },
+                'pulse': {
+                    '0%, 100%': { opacity: 1 },
+                    '50%': { opacity: 0.5 },
+                },
+                'float-1': {
+                  '0%, 100%': { transform: 'translateY(0px) rotate(0deg)' },
+                  '50%': { transform: 'translateY(-6px) rotate(5deg)' },
+                },
+                'float-2': {
+                  '0%, 100%': { transform: 'translateY(0px) rotate(0deg)' },
+                  '50%': { transform: 'translateY(5px) rotate(-5deg)' },
+                },
+                'bubble-up': {
+                  '0%': { transform: 'translateY(0)', opacity: '1' },
+                  '100%': { transform: 'translateY(-120vh) rotate(600deg)', opacity: '0' },
+                },
+            },
+            animation: {
+              'fade-in': 'fade-in 0.5s ease-out',
+              'fade-in-down': 'fade-in-down 0.5s ease-out',
+              'fade-in-up': 'fade-in-up 0.5s ease-out',
+              'pulse': 'pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite',
+              'float-1': 'float-1 4s ease-in-out infinite',
+              'float-2': 'float-2 5.5s ease-in-out infinite 0.5s',
+              'bubble-up': 'bubble-up linear infinite',
+            }
+          },
+        },
+      }
+    </script>
+    <style>
+      /* Hide scrollbars for Webkit-based browsers (Chrome, Safari) */
+      ::-webkit-scrollbar {
+        display: none;
+      }
+      /* Hide scrollbars for Firefox */
+      html {
+        scrollbar-width: none;
+      }
+      /* Hide scrollbars for IE and Edge */
+      body {
+        -ms-overflow-style: none;
+      }
+    </style>
+  <script type="importmap">
+{
+  "imports": {
+    "react-dom/": "https://aistudiocdn.com/react-dom@^19.2.0/",
+    "react/": "https://aistudiocdn.com/react@^19.2.0/",
+    "react": "https://aistudiocdn.com/react@^19.2.0",
+    "recharts": "https://aistudiocdn.com/recharts@^3.3.0",
+    "jspdf": "https://aistudiocdn.com/jspdf@^2.5.1",
+    "react-router-dom": "https://aistudiocdn.com/react-router-dom@^6.25.1",
+    "express": "https://aistudiocdn.com/express@^5.1.0",
+    "dotenv": "https://aistudiocdn.com/dotenv@^17.2.3",
+    "cors": "https://aistudiocdn.com/cors@^2.8.5",
+    "mongoose": "https://aistudiocdn.com/mongoose@^8.19.3",
+    "process": "https://aistudiocdn.com/process@^0.11.10",
+    "jsonwebtoken": "https://aistudiocdn.com/jsonwebtoken@^9.0.2",
+    "bcryptjs": "https://aistudiocdn.com/bcryptjs@^3.0.3",
+    "@google/genai": "https://aistudiocdn.com/@google/genai@^1.28.0",
+    "express-validator": "https://aistudiocdn.com/express-validator@^7.3.0",
+    "express-async-handler": "https://aistudiocdn.com/express-async-handler@^1.2.0",
+    "vite": "https://aistudiocdn.com/vite@^7.1.12",
+    "@vitejs/plugin-react": "https://aistudiocdn.com/@vitejs/plugin-react@^5.1.0",
+    "@jest/globals": "https://aistudiocdn.com/@jest/globals@^30.2.0",
+    "crypto": "https://aistudiocdn.com/crypto@^1.0.1",
+    "nodemailer": "https://aistudiocdn.com/nodemailer@^7.0.10",
+    "mongodb-memory-server": "https://aistudiocdn.com/mongodb-memory-server@^10.3.0",
+    "supertest": "https://aistudiocdn.com/supertest@^7.1.4",
+    "json2csv": "https://aistudiocdn.com/json2csv@^6.0.0-alpha.2",
+    "express-rate-limit": "https://aistudiocdn.com/express-rate-limit@^8.2.1",
+    "@tanstack/react-query": "https://aistudiocdn.com/@tanstack/react-query@^5.51.11",
+    "uuid": "https://aistudiocdn.com/uuid@^13.0.0",
+    "@tanstack/query-core": "https://aistudiocdn.com/@tanstack/query-core@^5.90.6"
+  }
+}
+</script>
+<link rel="stylesheet" href="/index.css">
+</head>
+  <body class="bg-slate-50 text-slate-800 dark:bg-slate-900 dark:text-slate-200">
+    <div id="root"></div>
+    <script type="module" src="/index.tsx"></script>
+  </body>
+</html>

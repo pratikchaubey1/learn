@@ -1,0 +1,46 @@
+{
+  "name": "refresh-kid-learning",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "react-dom": "^19.2.0",
+    "react": "^19.2.0",
+    "recharts": "^3.3.0",
+    "jspdf": "^2.5.1",
+    "react-router-dom": "^6.25.1",
+    "express": "^5.1.0",
+    "dotenv": "^17.2.3",
+    "cors": "^2.8.5",
+    "mongoose": "^8.19.3",
+    "process": "^0.11.10",
+    "jsonwebtoken": "^9.0.2",
+    "bcryptjs": "^3.0.3",
+    "@google/genai": "^1.28.0",
+    "express-validator": "^7.3.0",
+    "express-async-handler": "^1.2.0",
+    "vite": "^7.1.12",
+    "@vitejs/plugin-react": "^5.1.0",
+    "@jest/globals": "^30.2.0",
+    "crypto": "^1.0.1",
+    "nodemailer": "^7.0.10",
+    "mongodb-memory-server": "^10.3.0",
+    "supertest": "^7.1.4",
+    "json2csv": "^6.0.0-alpha.2",
+    "express-rate-limit": "^8.2.1",
+    "@tanstack/react-query": "^5.51.11",
+    "uuid": "^13.0.0",
+    "@tanstack/query-core": "^5.90.6"
+  },
+  "devDependencies": {
+    "@types/node": "^22.14.0",
+    "@vitejs/plugin-react": "^5.0.0",
+    "typescript": "~5.8.2",
+    "vite": "^6.2.0"
+  }
+}

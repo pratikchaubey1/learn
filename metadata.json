@@ -1,0 +1,5 @@
+{
+  "name": "Refresh Kid Learning",
+  "description": "An AI-powered web application for ACT/SAT preparation, featuring AI-generated tests, detailed performance analysis with charts and tables, personalized feedback, and an admin dashboard for monitoring user progress.",
+  "requestFramePermissions": []
+}
