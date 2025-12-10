@@ -10,6 +10,7 @@ import {
   ChatMessage,
   QuestionAnalysis,
   TopicPerformance,
+  Exam,
 } from "../types";
 import { v4 as uuidv4 } from "uuid";
 
@@ -19,6 +20,38 @@ if (!geminiApiKey) {
 }
 
 const ai = new GoogleGenAI({ apiKey: geminiApiKey });
+
+/**
+ * Normalize low-level Gemini / HTTP errors into short, user-friendly messages
+ * so the frontend never sees raw JSON like the quota error payload.
+ */
+const mapGeminiError = (error: any, action: string): Error => {
+  const rawMessage = typeof error?.message === "string" ? error.message : "";
+
+  let userMessage = `Something went wrong while ${action}. Please try again in a moment.`;
+  let statusCode = 500;
+
+  // Common free-tier / quota exhaustion shapes. The client library usually
+  // stuffs the full JSON error response into `message`.
+  if (
+    rawMessage.includes("You exceeded your current quota") ||
+    rawMessage.includes('"code":429') ||
+    rawMessage.includes("RESOURCE_EXHAUSTED") ||
+    rawMessage.toLowerCase().includes("quota")
+  ) {
+    userMessage =
+      "Our AI test generator has hit its daily limit for this project. Please wait a little while and try again, or come back later today.";
+    statusCode = 429;
+  }
+
+  console.error("Gemini API error while", action, "=>", error);
+
+  const friendlyError = new Error(userMessage);
+  // Allow the error handler to send a more appropriate status code.
+  (friendlyError as any).statusCode = statusCode;
+  (friendlyError as any).rawGeminiError = rawMessage;
+  return friendlyError;
+};
 
 const parseJsonResponse = <T>(rawText: string | undefined): T => {
   if (!rawText || !rawText.trim()) {
@@ -90,6 +123,12 @@ export const geminiService = {
       promptModifier +=
         " This is a diagnostic test, so questions must cover a broad range of fundamental topics and difficulties to accurately assess baseline knowledge. ";
     }
+    // Subject-specific guidance so mocks feel like the real section.
+    const lowerType = testType.toLowerCase();
+    if (lowerType.includes("science")) {
+      promptModifier +=
+        " Treat this as an ACT Science section. Use short passages, charts, or experiment descriptions drawn from biology, chemistry, physics, or Earth/space science. Focus on data interpretation, experimental design, and scientific reasoning — NOT math problem solving.";
+    }
     if (topic) {
       promptModifier += ` This is a concept check quiz focusing specifically on the topic of: "${topic}". `;
     }
@@ -104,89 +143,93 @@ export const geminiService = {
 
     const userPrompt = `Generate ${numQuestions} high-quality, authentic-style question(s) for a "${testType}" exam.${promptModifier}`;
 
-    const response = await ai.models.generateContent({
-      model: "gemini-2.5-flash",
-      contents: userPrompt,
-      config: {
-        responseMimeType: "application/json",
-        responseSchema: {
-          type: Type.ARRAY,
-          items: {
-            type: Type.OBJECT,
-            properties: {
-              _id: { type: Type.STRING },
-              questionText: { type: Type.STRING },
-              options: { type: Type.ARRAY, items: { type: Type.STRING } },
-              correctAnswerIndex: { type: Type.NUMBER },
-              explanation: { type: Type.STRING },
-              topic: { type: Type.STRING },
-              difficulty: {
-                type: Type.STRING,
-                enum: ["easy", "medium", "hard"],
+    try {
+      const response = await ai.models.generateContent({
+        model: "gemini-2.5-flash",
+        contents: userPrompt,
+        config: {
+          responseMimeType: "application/json",
+          responseSchema: {
+            type: Type.ARRAY,
+            items: {
+              type: Type.OBJECT,
+              properties: {
+                _id: { type: Type.STRING },
+                questionText: { type: Type.STRING },
+                options: { type: Type.ARRAY, items: { type: Type.STRING } },
+                correctAnswerIndex: { type: Type.NUMBER },
+                explanation: { type: Type.STRING },
+                topic: { type: Type.STRING },
+                difficulty: {
+                  type: Type.STRING,
+                  enum: ["easy", "medium", "hard"],
+                },
+                passage: { type: Type.STRING },
               },
-              passage: { type: Type.STRING },
+              required: [
+                "_id",
+                "questionText",
+                "options",
+                "correctAnswerIndex",
+                "explanation",
+                "topic",
+              ],
             },
-            required: [
-              "_id",
-              "questionText",
-              "options",
-              "correctAnswerIndex",
-              "explanation",
-              "topic",
-            ],
           },
+          systemInstruction: systemInstruction,
         },
-        systemInstruction: systemInstruction,
-      },
-    });
+      });
 
-    const result = parseJsonResponse<any[]>(response.text);
+      const result = parseJsonResponse<any[]>(response.text);
 
-    if (!result || !Array.isArray(result) || result.length === 0) {
-      throw new Error("AI returned an empty or invalid list of questions.");
-    }
-
-    const sanitizedResult: Question[] = result.map(
-      (q: any, index: number): Question => {
-        if (
-          !q ||
-          typeof q.questionText === "undefined" ||
-          !Array.isArray(q.options) ||
-          typeof q.correctAnswerIndex !== "number" ||
-          q.options.length < 2
-        ) {
-          throw new Error(
-            `AI returned malformed question object at index ${index}.`
-          );
-        }
-
-        const sanitizedOptions: string[] = q.options.map(sanitizeContent);
-
-        if (
-          q.correctAnswerIndex < 0 ||
-          q.correctAnswerIndex >= sanitizedOptions.length
-        ) {
-          console.warn(
-            `AI returned an invalid correctAnswerIndex (${q.correctAnswerIndex}) for question ${index}. Defaulting to 0.`
-          );
-          q.correctAnswerIndex = 0;
-        }
-
-        return {
-          _id: q._id || uuidv4(),
-          questionText: sanitizeContent(q.questionText),
-          options: sanitizedOptions,
-          correctAnswerIndex: q.correctAnswerIndex,
-          explanation:
-            sanitizeContent(q.explanation) || "No explanation provided.",
-          topic: sanitizeContent(q.topic) || "General",
-          difficulty: q.difficulty,
-          passage: sanitizeContent(q.passage),
-        };
+      if (!result || !Array.isArray(result) || result.length === 0) {
+        throw new Error("AI returned an empty or invalid list of questions.");
       }
-    );
 
-    return sanitizedResult;
+      const sanitizedResult: Question[] = result.map(
+        (q: any, index: number): Question => {
+          if (
+            !q ||
+            typeof q.questionText === "undefined" ||
+            !Array.isArray(q.options) ||
+            typeof q.correctAnswerIndex !== "number" ||
+            q.options.length < 2
+          ) {
+            throw new Error(
+              `AI returned malformed question object at index ${index}.`
+            );
+          }
+
+          const sanitizedOptions: string[] = q.options.map(sanitizeContent);
+
+          if (
+            q.correctAnswerIndex < 0 ||
+            q.correctAnswerIndex >= sanitizedOptions.length
+          ) {
+            console.warn(
+              `AI returned an invalid correctAnswerIndex (${q.correctAnswerIndex}) for question ${index}. Defaulting to 0.`
+            );
+            q.correctAnswerIndex = 0;
+          }
+
+          return {
+            _id: q._id || uuidv4(),
+            questionText: sanitizeContent(q.questionText),
+            options: sanitizedOptions,
+            correctAnswerIndex: q.correctAnswerIndex,
+            explanation:
+              sanitizeContent(q.explanation) || "No explanation provided.",
+            topic: sanitizeContent(q.topic) || "General",
+            difficulty: q.difficulty,
+            passage: sanitizeContent(q.passage),
+          };
+        }
+      );
+
+      return sanitizedResult;
+    } catch (error) {
+      throw mapGeminiError(error, "generating test questions");
+    }
   },
 
   // ---------- 2. Analyze Test Results (AI) ----------
@@ -216,51 +259,52 @@ export const geminiService = {
       analysisPayload
     )}`;
 
-    const response = await ai.models.generateContent({
-      model: "gemini-2.5-flash",
-      contents: userPrompt,
-      config: {
-        responseMimeType: "application/json",
-        responseSchema: {
-          type: Type.OBJECT,
-          properties: {
-            summary: { type: Type.STRING },
-            questionAnalysis: {
-              type: Type.ARRAY,
-              items: {
-                type: Type.OBJECT,
-                properties: {
-                  questionText: { type: Type.STRING },
-                  userAnswer: { type: Type.STRING },
-                  correctAnswer: { type: Type.STRING },
-                  isCorrect: { type: Type.BOOLEAN },
-                  explanation: { type: Type.STRING },
-                  topic: { type: Type.STRING },
-                  questionType: { type: Type.STRING },
+    try {
+      const response = await ai.models.generateContent({
+        model: "gemini-2.5-flash",
+        contents: userPrompt,
+        config: {
+          responseMimeType: "application/json",
+          responseSchema: {
+            type: Type.OBJECT,
+            properties: {
+              summary: { type: Type.STRING },
+              questionAnalysis: {
+                type: Type.ARRAY,
+                items: {
+                  type: Type.OBJECT,
+                  properties: {
+                    questionText: { type: Type.STRING },
+                    userAnswer: { type: Type.STRING },
+                    correctAnswer: { type: Type.STRING },
+                    isCorrect: { type: Type.BOOLEAN },
+                    explanation: { type: Type.STRING },
+                    topic: { type: Type.STRING },
+                    questionType: { type: Type.STRING },
+                  },
                 },
               },
-            },
-            topicPerformance: {
-              type: Type.ARRAY,
-              items: {
-                type: Type.OBJECT,
-                properties: {
-                  topic: { type: Type.STRING },
-                  correct: { type: Type.NUMBER },
-                  total: { type: Type.NUMBER },
+              topicPerformance: {
+                type: Type.ARRAY,
+                items: {
+                  type: Type.OBJECT,
+                  properties: {
+                    topic: { type: Type.STRING },
+                    correct: { type: Type.NUMBER },
+                    total: { type: Type.NUMBER },
+                  },
                 },
               },
             },
           },
+          systemInstruction: `You are an academic analysis AI. Your function is to analyze student test results. Your entire response must be ONLY a valid JSON object matching the provided schema. Do not add any text or markdown outside the JSON structure. For the 'summary', provide a brief, encouraging, and actionable 1-2 sentence overview. For 'explanation', offer a clear, concise sentence that helps the student learn. For 'topic', use 1-2 words. For 'questionType', identify a specific skill (e.g., "Main Idea", "Linear Equations").`,
         },
-        systemInstruction: `You are an academic analysis AI. Your function is to analyze student test results. Your entire response must be ONLY a valid JSON object matching the provided schema. Do not add any text or markdown outside the JSON structure. For the 'summary', provide a brief, encouraging, and actionable 1-2 sentence overview. For 'explanation', offer a clear, concise sentence that helps the student learn. For 'topic', use 1-2 words. For 'questionType', identify a specific skill (e.g., "Main Idea", "Linear Equations").`,
-      },
-    });
+      });
 
-    const result = parseJsonResponse<any>(response.text);
-    if (!result) throw new Error("AI returned empty analysis data.");
+      const result = parseJsonResponse<any>(response.text);
+      if (!result) throw new Error("AI returned empty analysis data.");
 
-    const validatedAnalysis: AnalysisResponse = {
+      const validatedAnalysis: AnalysisResponse = {
       summary:
         sanitizeContent(result.summary) ||
         "Your results have been analyzed. Review the breakdown below to see your strengths and areas for improvement.",
@@ -282,6 +326,9 @@ export const geminiService = {
     };
 
     return validatedAnalysis;
+  } catch (error) {
+    throw mapGeminiError(error, "analyzing your test results");
+  }
   },
 
   // ---------- 3. Generate Learning Plan (NO AI, always valid) ----------
@@ -314,6 +361,16 @@ export const geminiService = {
     const today = new Date();
     const weeks: PlanWeek[] = [];
 
+    // Pick a reasonable default mini test type based on the student's goal.
+    const pickMiniTestType = (goal: ExamGoal, result: ITestResult): TestType => {
+      if (goal.exam === Exam.SAT) return TestType.SAT_RW_MOCK;
+      if (goal.exam === Exam.ACT) return TestType.ACT_READING_MOCK;
+      if (goal.exam === Exam.AP) return TestType.AP_USH_MOCK;
+      return (result.testType as TestType) || TestType.SAT_RW_MOCK;
+    };
+
+    const miniTestType = pickMiniTestType(goal, result);
+
     for (let i = 0; i < weeksCount; i++) {
       const weekNumber = i + 1;
 
@@ -329,8 +386,6 @@ export const geminiService = {
         weakestTopics.length > 0
           ? weakestTopics[i % weakestTopics.length]
           : "General";
-
-      const examName = goal.exam || result.testType || "SAT";
 
       const steps = [
         {
@@ -358,7 +413,7 @@ export const geminiService = {
           title: "Mini test",
           description: "Take a short timed quiz.",
           type: "test" as const,
-          relatedTestType: examName,
+          relatedTestType: miniTestType,
           topic: undefined,
           completed: false,
           estimatedTime: "~20 mins",
@@ -396,15 +451,19 @@ export const geminiService = {
       context ? `\n\nIMPORTANT CONTEXT ABOUT THE USER: ${context}` : ""
     }`;
 
-    const response = await ai.models.generateContentStream({
-      model: model,
-      contents: contents,
-      config: {
-        systemInstruction,
-      },
-    });
+    try {
+      const response = await ai.models.generateContentStream({
+        model: model,
+        contents: contents,
+        config: {
+          systemInstruction,
+        },
+      });
 
-    return response;
+      return response;
+    } catch (error) {
+      throw mapGeminiError(error, "chatting with Aicey");
+    }
   },
 
   // ---------- 5. Admin Insights (AI) ----------
@@ -422,10 +481,14 @@ export const geminiService = {
         - **Weakest Topics (by accuracy):** ${JSON.stringify(stats.weakestTopics)}
         `;
 
-    const response = await ai.models.generateContent({
-      model: "gemini-2.5-flash",
-      contents: prompt,
-    });
-    return response.text;
+    try {
+      const response = await ai.models.generateContent({
+        model: "gemini-2.5-flash",
+        contents: prompt,
+      });
+      return response.text;
+    } catch (error) {
+      throw mapGeminiError(error, "generating admin AI insights");
+    }
   },
 };

@@ -56,9 +56,9 @@ const ResultsWrapper: React.FC = () => {
         );
     }
     
-    if (result?.isDiagnostic && generatePlanMutation.isPending) {
-        return <LoadingView type="plan" />;
-    }
+    // NOTE: We no longer block on a full-screen "Generating Your Plan" loader.
+    // The plan is generated in the background while the user views results,
+    // and the "View My New Plan" button shows a small spinner instead.
 
     if (result) {
        return (

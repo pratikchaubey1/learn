@@ -113,6 +113,25 @@ const getStepIcon = (type: PlanStep['type']) => {
     }
 };
 
+// Map a plan step's relatedTestType (which might be legacy values like 'SAT' or 'ACT')
+// to a valid TestType used by the test system.
+const getPlanStepTestType = (step: PlanStep, exam?: Exam): TestType => {
+    const raw = step.relatedTestType as unknown as string | undefined;
+
+    // If it's already a valid TestType string, keep it.
+    if (raw && Object.values(TestType).includes(raw as TestType)) {
+        return raw as TestType;
+    }
+
+    // Legacy values: exam-level strings instead of TestType.
+    if (raw === 'SAT' || exam === Exam.SAT) return TestType.SAT_RW_MOCK;
+    if (raw === 'ACT' || exam === Exam.ACT) return TestType.ACT_READING_MOCK;
+    if (raw === 'AP' || exam === Exam.AP) return TestType.AP_USH_MOCK;
+
+    // Fallback for concept/review steps.
+    return TestType.CONCEPT_CHECK_QUIZ;
+};
+
 const DailyFocus: React.FC<{ user: User; onSelectMockTest: (testType: TestType) => void; onSelectTestFromPlan: (testType: TestType, isDiagnostic: boolean, planDetails: { weekIndex: number, stepId: string, topic?: string }) => void }> = ({ user, onSelectMockTest, onSelectTestFromPlan }) => {
     const { updateUser } = useAuth();
 
@@ -216,10 +235,10 @@ const DailyFocus: React.FC<{ user: User; onSelectMockTest: (testType: TestType) 
                                        <p className="text-xs text-slate-500 dark:text-slate-400 pl-7">{step.description}</p>
                                    </div>
                                </label>
-                               {step.type !== 'review' && !step.completed && (
+                               {!step.completed && (
                                    <button
                                        onClick={() => {
-                                           const testType = step.relatedTestType || TestType.CONCEPT_CHECK_QUIZ;
+                                           const testType = getPlanStepTestType(step, user.goal?.exam);
                                            const topic = step.relatedTestType ? undefined : (step.topic || step.title);
                                            onSelectTestFromPlan(testType, false, { weekIndex: currentWeekPlan.week - 1, stepId: step._id, topic });
                                        }}
@@ -387,10 +406,10 @@ const MyPlanView: React.FC<{onSelectTest: (testType: TestType, isDiagnostic: boo
                                         <p className="text-sm text-slate-500 dark:text-slate-400 pl-7">{step.description}</p>
                                     </div>
                                 </label>
-                                {!step.completed && step.type !== 'review' && (
+                                {!step.completed && (
                                     <button 
                                         onClick={() => {
-                                            const testType = step.relatedTestType || TestType.CONCEPT_CHECK_QUIZ;
+                                            const testType = getPlanStepTestType(step, user.goal?.exam);
                                             const topic = step.relatedTestType ? undefined : (step.topic || step.title);
                                             onSelectTest(testType, false, { weekIndex: activeWeekIndex, stepId: step._id, topic });
                                         }}

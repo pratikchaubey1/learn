@@ -1,15 +1,98 @@
 // routes/tests.ts
 import express from 'express';
 import asyncHandler from 'express-async-handler';
+import { v4 as uuidv4 } from 'uuid';
 import { protect, AuthRequest } from '../middleware/auth';
 import TestDefinition from '../models/TestDefinition';
 import TestSession from '../models/TestSession';
 import TestResult from '../models/TestResult';
 import User from '../models/User';
 import { geminiService } from '../services/geminiService';
-import { Question, UserAnswer } from '../types';
+import { Question, UserAnswer, TestType, QuestionAnalysis, TopicPerformance } from '../types';
 
 const router = express.Router();
+
+// Local fallback questions used when Gemini quota is exhausted or unavailable.
+const generateFallbackQuestions = (
+  testType: TestType,
+  numQuestions: number,
+  topic?: string
+): Question[] => {
+  const questions: Question[] = [];
+  const baseTopic = topic || 'Basic Skills';
+
+  for (let i = 0; i < numQuestions; i++) {
+    const a = 2 + i;
+    const b = 3 + i;
+    const correct = a + b;
+    const options = [correct, correct + 1, correct - 1, correct + 2].map(String);
+
+    questions.push({
+      _id: uuidv4(),
+      questionText: `What is ${a} + ${b}?`,
+      options,
+      correctAnswerIndex: 0,
+      explanation: `${a} + ${b} = ${correct}.`,
+      topic: baseTopic,
+      difficulty: 'easy',
+    });
+  }
+
+  return questions;
+};
+
+// Local non-AI analysis used when Gemini analysis is unavailable.
+const analyzeLocally = (
+  session: any,
+  answers: UserAnswer[]
+): { summary: string; questionAnalysis: QuestionAnalysis[]; topicPerformance: TopicPerformance[] } => {
+  const questionAnalysis: QuestionAnalysis[] = (session.questions as Question[]).map(
+    (q: Question): QuestionAnalysis => {
+      const userAnswer = answers.find((a) => a.questionId === q._id);
+      const userAnswerText =
+        userAnswer !== undefined && q.options[userAnswer.answerIndex] !== undefined
+          ? q.options[userAnswer.answerIndex]
+          : 'Not answered';
+      const isCorrect =
+        userAnswer !== undefined && userAnswer.answerIndex === q.correctAnswerIndex;
+      const topic = q.topic || 'General';
+
+      return {
+        questionText: q.questionText,
+        userAnswer: userAnswerText,
+        correctAnswer: q.options[q.correctAnswerIndex],
+        isCorrect,
+        explanation: q.explanation || 'Review this concept.',
+        topic,
+        questionType: 'Concept Check',
+      };
+    }
+  );
+
+  const topicMap: Record<string, { correct: number; total: number }> = {};
+  for (const qa of questionAnalysis) {
+    const t = qa.topic || 'General';
+    if (!topicMap[t]) {
+      topicMap[t] = { correct: 0, total: 0 };
+    }
+    topicMap[t].total += 1;
+    if (qa.isCorrect) {
+      topicMap[t].correct += 1;
+    }
+  }
+
+  const topicPerformance: TopicPerformance[] = Object.entries(topicMap).map(
+    ([topic, stats]) => ({ topic, correct: stats.correct, total: stats.total })
+  );
+
+  const correctCount = questionAnalysis.filter((qa) => qa.isCorrect).length;
+  const totalQuestions = questionAnalysis.length || 1;
+  const scorePct = Math.round((correctCount / totalQuestions) * 100);
+
+  const summary = `We auto-graded your test without AI. You answered ${correctCount} of ${totalQuestions} questions correctly (${scorePct}%).`;
+
+  return { summary, questionAnalysis, topicPerformance };
+};
 
 // GET /api/tests - Get all test definitions
 router.get('/', protect, asyncHandler(async (req: AuthRequest, res: express.Response) => {
@@ -24,7 +107,24 @@ router.post('/start', protect, asyncHandler(async (req: AuthRequest, res: expres
 
     const numQuestions = isDiagnostic ? 25 : 10;
     
-    const questions = await geminiService.generateTestQuestions(testType, numQuestions, topic);
+    let questions: Question[];
+    try {
+        questions = await geminiService.generateTestQuestions(testType, numQuestions, topic);
+    } catch (error: any) {
+        const statusCode = error?.statusCode;
+        const message = String(error?.message || '').toLowerCase();
+        const isQuotaIssue =
+            statusCode === 429 ||
+            message.includes('daily limit') ||
+            message.includes('quota');
+
+        if (isQuotaIssue) {
+            console.warn('Gemini quota reached; falling back to local questions for test:', testType);
+            questions = generateFallbackQuestions(testType as TestType, numQuestions, topic);
+        } else {
+            throw error;
+        }
+    }
 
     if (!questions || questions.length === 0) {
         res.status(500);
@@ -80,7 +180,24 @@ router.post('/session/:id/submit-and-finalize', protect, asyncHandler(async (req
     session.isCompleted = true;
 
     // 3. Analyze results
-    const analysisData = await geminiService.analyzeTestResults(session.toObject() as any);
+    let analysisData: { summary: string; questionAnalysis: QuestionAnalysis[]; topicPerformance: TopicPerformance[] };
+    try {
+        analysisData = await geminiService.analyzeTestResults(session.toObject() as any);
+    } catch (error: any) {
+        const statusCode = error?.statusCode;
+        const message = String(error?.message || '').toLowerCase();
+        const isQuotaIssue =
+            statusCode === 429 ||
+            message.includes('daily limit') ||
+            message.includes('quota');
+
+        if (isQuotaIssue) {
+            console.warn('Gemini quota reached; falling back to local analysis for test session:', sessionId);
+            analysisData = analyzeLocally(session.toObject(), answers);
+        } else {
+            throw error;
+        }
+    }
     
     // 4. Calculate score and XP
     const correctCount = analysisData.questionAnalysis.filter((q: any) => q.isCorrect).length;
