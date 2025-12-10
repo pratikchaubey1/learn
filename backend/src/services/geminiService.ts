@@ -31,8 +31,6 @@ const mapGeminiError = (error: any, action: string): Error => {
   let userMessage = `Something went wrong while ${action}. Please try again in a moment.`;
   let statusCode = 500;
 
-  // Common free-tier / quota exhaustion shapes. The client library usually
-  // stuffs the full JSON error response into `message`.
   if (
     rawMessage.includes("You exceeded your current quota") ||
     rawMessage.includes('"code":429') ||
@@ -47,7 +45,6 @@ const mapGeminiError = (error: any, action: string): Error => {
   console.error("Gemini API error while", action, "=>", error);
 
   const friendlyError = new Error(userMessage);
-  // Allow the error handler to send a more appropriate status code.
   (friendlyError as any).statusCode = statusCode;
   (friendlyError as any).rawGeminiError = rawMessage;
   return friendlyError;
@@ -70,28 +67,22 @@ const parseJsonResponse = <T>(rawText: string | undefined): T => {
 
 // Recursively search for and extract string content from potentially nested objects.
 const sanitizeContent = (content: any): any => {
-  if (typeof content === "string") {
-    return content;
-  }
-  if (content === null || content === undefined) {
-    return "";
-  }
+  if (typeof content === "string") return content;
+  if (content === null || content === undefined) return "";
   if (typeof content === "object") {
     if ("content" in content && typeof (content as any).content === "string") {
       return (content as any).content;
     }
-    // If it's an array, sanitize each item.
     if (Array.isArray(content)) {
       return content.map(sanitizeContent);
     }
-    // If it's another type of object, try to find a string value.
     for (const key in content) {
       if (typeof content[key] === "string") {
         return content[key];
       }
     }
   }
-  return JSON.stringify(content); // Fallback for unexpected formats
+  return JSON.stringify(content);
 };
 
 interface AdminInsightStats {
@@ -106,6 +97,25 @@ interface AnalysisResponse {
   topicPerformance: TopicPerformance[];
 }
 
+// ---------- Helper to filter out trivial questions ----------
+
+const isTrivialQuestion = (q: { questionText: string; options: string[] }): boolean => {
+  const text = sanitizeContent(q.questionText).toLowerCase().trim();
+
+  // simple numeric operation like "2 + 3"
+  const simpleOpRegex = /\b\d+\s*([+\-×x*/])\s*\d+\b/;
+
+  const hasContextWord = /(graph|table|chart|experiment|data|function|equation|inequality|velocity|speed|distance|probability|percentage|average|mean|median|mode|force|energy|mass|volume|current|voltage|circuit|reaction|moles|stoichiometry)/.test(
+    text
+  );
+
+  if (text.length < 40 && simpleOpRegex.test(text) && !hasContextWord) {
+    return true;
+  }
+
+  return false;
+};
+
 export const geminiService = {
   // ---------- 1. Generate Test Questions (AI) ----------
 
@@ -113,35 +123,60 @@ export const geminiService = {
     testType: TestType,
     numQuestions: number,
     topic?: string,
-    difficulty?: "easy" | "medium" | "hard",
+    difficulty: "easy" | "medium" | "hard" = "hard",
     avoidTopics?: string[]
   ): Promise<Question[]> {
-    const systemInstruction = `You are an expert exam creator for high school standardized tests (SAT, ACT, AP). Your response MUST be ONLY a valid JSON array of question objects that conforms to the provided schema. The 'options' array must contain only strings. ABSOLUTELY NO other text or markdown. Each question must have a unique "_id" string. All math MUST use valid, standard LaTeX (e.g., \\frac{a}{b}, not \\rac) and be wrapped in '$...$' for inline or '$$...$$' for display. The 'questionText' and 'options' fields must be simple strings, not nested objects. Each 'questionText' MUST be concise, under 25 words.`;
+    const systemInstruction = `You are an expert exam creator for high school standardized tests (SAT, ACT, AP).
+
+Your response MUST be ONLY a valid JSON array of question objects that conforms to the provided schema. The 'options' array must contain only strings. ABSOLUTELY NO other text or markdown.
+
+Each question must have a unique "_id" string.
+All math MUST use valid, standard LaTeX (e.g., \\frac{a}{b}, not \\rac) and be wrapped in '$...$' for inline or '$$...$$' for display.
+The 'questionText' and 'options' fields must be simple strings, not nested objects.
+Each 'questionText' MUST be concise, under 25 words.
+
+FOCUS: Create non-trivial, hard-level questions in math and science:
+- Math: algebraic manipulations, functions, inequalities, systems of equations, quadratics, exponentials/logs, word problems, basic trigonometry, statistics and probability.
+- Science: physics (kinematics, forces, energy), chemistry (moles, stoichiometry, gases), biology (experiments/data), and data-interpretation from graphs/tables/experiments.
+
+HARDNESS REQUIREMENT:
+- Do NOT create questions that can be solved by a single mental arithmetic step (like "2 + 3", "5 - 1", or a trivial unit conversion).
+- Every question must require multi-step reasoning (combining formulas, interpreting a graph/table, or relating multiple concepts).
+- A typical student should need at least 45–90 seconds to solve each question.
+
+Across each test, always include a mix of challenging math and science/data-interpretation problems, not easy drill questions.`;
 
     let promptModifier = "";
     if (testType.toLowerCase().includes("diagnostic")) {
       promptModifier +=
-        " This is a diagnostic test, so questions must cover a broad range of fundamental topics and difficulties to accurately assess baseline knowledge. ";
+        " This is a diagnostic test, but it should still avoid very easy questions. Include a range of medium to hard questions, with a strong bias toward hard.";
     }
-    // Subject-specific guidance so mocks feel like the real section.
+
     const lowerType = testType.toLowerCase();
     if (lowerType.includes("science")) {
       promptModifier +=
-        " Treat this as an ACT Science section. Use short passages, charts, or experiment descriptions drawn from biology, chemistry, physics, or Earth/space science. Focus on data interpretation, experimental design, and scientific reasoning — NOT math problem solving.";
+        " Treat this as an ACT Science section. Use short passages, charts, or experiment descriptions from biology, chemistry, physics, or Earth/space science. Focus on data interpretation, experimental design, and scientific reasoning, and keep the difficulty hard overall.";
     }
     if (topic) {
-      promptModifier += ` This is a concept check quiz focusing specifically on the topic of: "${topic}". `;
+      promptModifier += ` Focus specifically on the topic: "${topic}", and write questions at a hard difficulty level for that topic.`;
     }
     if (difficulty) {
-      promptModifier += ` The question difficulty should be '${difficulty}'. `;
+      promptModifier += ` The question difficulty must be '${difficulty}', and questions should feel like the most challenging items on the ACT/SAT, not basic school exercises.`;
+    } else {
+      promptModifier +=
+        " The overall difficulty must be hard. Do not include any easy questions or questions solvable in a single arithmetic step.";
     }
     if (avoidTopics && avoidTopics.length > 0) {
       promptModifier += ` Do not generate questions on these topics: ${avoidTopics.join(
         ", "
-      )}. `;
+      )}.`;
     }
 
-    const userPrompt = `Generate ${numQuestions} high-quality, authentic-style question(s) for a "${testType}" exam.${promptModifier}`;
+    // Ask for extra questions so we can drop trivial ones.
+    const requestedCount = numQuestions * 2;
+
+    const userPrompt = `Generate ${requestedCount} high-quality, hard question(s) for a "${testType}" exam.${promptModifier}
+All questions must require multi-step reasoning in math or science.`;
 
     try {
       const response = await ai.models.generateContent({
@@ -176,7 +211,7 @@ export const geminiService = {
               ],
             },
           },
-          systemInstruction: systemInstruction,
+          systemInstruction,
         },
       });
 
@@ -220,13 +255,21 @@ export const geminiService = {
             explanation:
               sanitizeContent(q.explanation) || "No explanation provided.",
             topic: sanitizeContent(q.topic) || "General",
-            difficulty: q.difficulty,
+            difficulty: q.difficulty || "hard",
             passage: sanitizeContent(q.passage),
           };
         }
       );
 
-      return sanitizedResult;
+      // Drop trivial questions like "What is 2 + 3?"
+      const nonTrivial = sanitizedResult.filter((q) => !isTrivialQuestion(q));
+
+      const finalQuestions =
+        nonTrivial.length >= numQuestions
+          ? nonTrivial.slice(0, numQuestions)
+          : sanitizedResult.slice(0, numQuestions);
+
+      return finalQuestions;
     } catch (error) {
       throw mapGeminiError(error, "generating test questions");
     }
@@ -305,36 +348,35 @@ export const geminiService = {
       if (!result) throw new Error("AI returned empty analysis data.");
 
       const validatedAnalysis: AnalysisResponse = {
-      summary:
-        sanitizeContent(result.summary) ||
-        "Your results have been analyzed. Review the breakdown below to see your strengths and areas for improvement.",
-      questionAnalysis: (result.questionAnalysis || []).map((qa: any) => ({
-        questionText: sanitizeContent(qa.questionText) || "Unknown Question",
-        userAnswer: sanitizeContent(qa.userAnswer) || "Not Answered",
-        correctAnswer: sanitizeContent(qa.correctAnswer) || "Unknown",
-        isCorrect: typeof qa.isCorrect === "boolean" ? qa.isCorrect : false,
-        explanation:
-          sanitizeContent(qa.explanation) || "No explanation provided.",
-        topic: sanitizeContent(qa.topic) || "General",
-        questionType: sanitizeContent(qa.questionType) || "General",
-      })),
-      topicPerformance: (result.topicPerformance || []).map((tp: any) => ({
-        topic: sanitizeContent(tp.topic) || "Unknown Topic",
-        correct: typeof tp.correct === "number" ? tp.correct : 0,
-        total: typeof tp.total === "number" && tp.total > 0 ? tp.total : 1,
-      })),
-    };
+        summary:
+          sanitizeContent(result.summary) ||
+          "Your results have been analyzed. Review the breakdown below to see your strengths and areas for improvement.",
+        questionAnalysis: (result.questionAnalysis || []).map((qa: any) => ({
+          questionText: sanitizeContent(qa.questionText) || "Unknown Question",
+          userAnswer: sanitizeContent(qa.userAnswer) || "Not Answered",
+          correctAnswer: sanitizeContent(qa.correctAnswer) || "Unknown",
+          isCorrect: typeof qa.isCorrect === "boolean" ? qa.isCorrect : false,
+          explanation:
+            sanitizeContent(qa.explanation) || "No explanation provided.",
+          topic: sanitizeContent(qa.topic) || "General",
+          questionType: sanitizeContent(qa.questionType) || "General",
+        })),
+        topicPerformance: (result.topicPerformance || []).map((tp: any) => ({
+          topic: sanitizeContent(tp.topic) || "Unknown Topic",
+          correct: typeof tp.correct === "number" ? tp.correct : 0,
+          total: typeof tp.total === "number" && tp.total > 0 ? tp.total : 1,
+        })),
+      };
 
-    return validatedAnalysis;
-  } catch (error) {
-    throw mapGeminiError(error, "analyzing your test results");
-  }
+      return validatedAnalysis;
+    } catch (error) {
+      throw mapGeminiError(error, "analyzing your test results");
+    }
   },
 
   // ---------- 3. Generate Learning Plan (NO AI, always valid) ----------
 
   async generateLearningPlan(goal: ExamGoal, result: ITestResult): Promise<IPlan> {
-    // Sort topics by weakest accuracy
     const sortedTopics = [...result.topicPerformance].sort((a, b) => {
       const accA = a.total > 0 ? a.correct / a.total : 0;
       const accB = b.total > 0 ? b.correct / b.total : 0;
@@ -347,7 +389,6 @@ export const geminiService = {
         .slice(0, 5)
         .map((t) => t.topic || "General") || [];
 
-    // Rough number of weeks until exam
     let weeksCount = 8;
     if (goal.examDate) {
       const examTime = Date.parse(goal.examDate);
@@ -361,7 +402,6 @@ export const geminiService = {
     const today = new Date();
     const weeks: PlanWeek[] = [];
 
-    // Pick a reasonable default mini test type based on the student's goal.
     const pickMiniTestType = (goal: ExamGoal, result: ITestResult): TestType => {
       if (goal.exam === Exam.SAT) return TestType.SAT_RW_MOCK;
       if (goal.exam === Exam.ACT) return TestType.ACT_READING_MOCK;
@@ -379,8 +419,8 @@ export const geminiService = {
       const end = new Date(start);
       end.setDate(end.getDate() + 6);
 
-      const startDate = start.toISOString(); // ✅ required
-      const endDate = end.toISOString();     // ✅ required
+      const startDate = start.toISOString();
+      const endDate = end.toISOString();
 
       const topicForWeek =
         weakestTopics.length > 0
@@ -389,7 +429,7 @@ export const geminiService = {
 
       const steps = [
         {
-          _id: uuidv4(), // ✅ required
+          _id: uuidv4(),
           title: "Learn core concepts",
           description: `Study key ideas for ${topicForWeek}.`,
           type: "concept" as const,
@@ -421,10 +461,10 @@ export const geminiService = {
       ];
 
       weeks.push({
-        week: weekNumber, 
-        startDate,       
-        endDate,          
-        summary: `Focus on ${topicForWeek} and timed practice.`, 
+        week: weekNumber,
+        startDate,
+        endDate,
+        summary: `Focus on ${topicForWeek} and timed practice.`,
         steps,
       } as PlanWeek);
     }
@@ -447,14 +487,14 @@ export const geminiService = {
       parts: [{ text: message.content }],
     }));
 
-    const systemInstruction = `You are Aicey, a friendly, encouraging AI study assistant for high school students. You are an expert in SAT, ACT, and AP subjects. Your personality is positive and helpful. Keep answers brief. Use emojis. 😊 Format with short paragraphs and lists. ${
+    const systemInstruction = `You are Aicey, a friendly, encouraging AI study assistant for high school students. You are an expert in SAT, ACT, and AP subjects. Your personality is positive and helpful. Keep answers brief. Use emojis. 😊 Format with short paragraphs and lists.${
       context ? `\n\nIMPORTANT CONTEXT ABOUT THE USER: ${context}` : ""
     }`;
 
     try {
       const response = await ai.models.generateContentStream({
-        model: model,
-        contents: contents,
+        model,
+        contents,
         config: {
           systemInstruction,
         },
@@ -470,16 +510,16 @@ export const geminiService = {
 
   async getAdminInsights(stats: AdminInsightStats) {
     const prompt = `Analyze this aggregated performance data for an online learning platform. Provide a brief, high-level summary as a single block of text. Focus on:
-        1. **Overall Performance:** Comment on general trends based on the provided user statistics.
-        2. **Top Struggling Areas:** Identify the top struggling topics from the accuracy data.
-        3. **Actionable Advice:** Give one concrete, platform-wide suggestion for improvement.
-        Keep the entire response under 150 words. Format with markdown for clarity (e.g., using **bold** headers).
+1. **Overall Performance:** Comment on general trends based on the provided user statistics.
+2. **Top Struggling Areas:** Identify the top struggling topics from the accuracy data.
+3. **Actionable Advice:** Give one concrete, platform-wide suggestion for improvement.
+Keep the entire response under 150 words. Format with markdown for clarity (e.g., using **bold** headers).
 
-        **Data Snapshot:**
-        - **Total Active Users:** ${stats.totalUsers}
-        - **Sample User Stats (first 100 users):** ${JSON.stringify(stats.userStats)}
-        - **Weakest Topics (by accuracy):** ${JSON.stringify(stats.weakestTopics)}
-        `;
+**Data Snapshot:**
+- **Total Active Users:** ${stats.totalUsers}
+- **Sample User Stats (first 100 users):** ${JSON.stringify(stats.userStats)}
+- **Weakest Topics (by accuracy):** ${JSON.stringify(stats.weakestTopics)}
+`;
 
     try {
       const response = await ai.models.generateContent({
